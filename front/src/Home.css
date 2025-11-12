@@ -1,0 +1,119 @@
+/* Home.css */
+
+.home-container {
+    position: relative;
+    width: 100%;
+    height: 100vh; /* Adjust to full viewport height or as needed */
+    background-image: url('./images/p1320376.webp'); /* Replace with actual image URL, e.g., a stock photo of a tall building with crane at sunset */
+    background-size: cover;
+    background-position: center;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start; /* Align content to the left for better matching the image */
+    color: white;
+    text-align: left;
+    padding: 0 10%;
+    box-sizing: border-box;
+  }
+  
+  .home-container::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.4); /* Dark overlay for better text visibility */
+    z-index: 1;
+  }
+  
+  .content {
+    position: relative;
+    z-index: 2;
+    max-width: 60%;
+  }
+  
+  h1 {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    font-weight: bold;
+  }
+  
+  p {
+    font-size: 1.5rem;
+    margin-bottom: 2rem;
+  }
+  
+  .buttons {
+    display: flex;
+    gap: 1rem;
+  }
+  span .gcb{
+    color: #020cdb;
+    font-size: 5rem;
+    
+  }
+  
+  .primary-button {
+    background-color: #020cdb; /* Blue button */
+    color: white;
+    border: none;
+    padding: 1rem 2rem;
+    font-size: 20px;
+    cursor: pointer;
+    border-radius: 5px;
+    font-weight: bold;
+  }
+  
+  .secondary-button {
+    background-color: transparent;
+    
+   
+    padding: 1rem 2rem;
+    font-size: 20px;
+    cursor: pointer;
+    border-radius: 5px;
+    transition: all 0.3s ease;
+    background-color: #8f90acb2;
+  border-color: blanchedalmond;
+  color: unset;
+  font-weight: bold;
+  }
+
+  .primary-button:hover,
+  .secondary-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(2, 12, 219, 0.3);
+  }
+
+  /* Animation de scroll vers la gauche */
+  .home-container.slide-out-left {
+    animation: slideOutLeft 0.5s ease-in-out forwards;
+  }
+
+  @keyframes slideOutLeft {
+    0% {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    100% {
+      transform: translateX(-100%);
+      opacity: 0;
+    }
+  }
+
+  /* Animation d'entrée pour la page Home */
+  .home-container {
+    animation: slideInFromRight 0.5s ease-in-out;
+  }
+
+  @keyframes slideInFromRight {
+    0% {
+      transform: translateX(100%);
+      opacity: 0;
+    }
+    100% {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }

@@ -21,6 +21,9 @@ router.get("/", async (req, res) => {
     const where = {};
     if (numConv) where.numConv = numConv;
     if (mois) where.mois = mois;
+    if (statut !== undefined) {
+      where.statutPaiement = statut === 'true' || statut === true;
+    }
 
     // Recherche
     if (q) {
@@ -43,10 +46,11 @@ router.get("/", async (req, res) => {
     const numBats = [...new Set(rows.map(f => f.numBat).filter(Boolean))];
     const codeClis = [...new Set(rows.map(f => f.codeCli).filter(Boolean))];
 
+    // Ne faire les requêtes que si les tableaux ne sont pas vides
     const [conventions, batiments, locataires] = await Promise.all([
-      Convention.findAll({ where: { numConv: { [Op.in]: numConvs } } }),
-      Mbatiment.findAll({ where: { numBat: { [Op.in]: numBats } } }),
-      Locataire.findAll({ where: { codeCli: { [Op.in]: codeClis } } })
+      numConvs.length > 0 ? Convention.findAll({ where: { numConv: { [Op.in]: numConvs } } }) : Promise.resolve([]),
+      numBats.length > 0 ? Mbatiment.findAll({ where: { numBat: { [Op.in]: numBats } } }) : Promise.resolve([]),
+      codeClis.length > 0 ? Locataire.findAll({ where: { codeCli: { [Op.in]: codeClis } } }) : Promise.resolve([])
     ]);
 
     const conventionsMap = new Map(conventions.map(c => [c.numConv, c.toJSON()]));
@@ -126,15 +130,11 @@ router.get("/:numFact", async (req, res) => {
   }
 });
 
-// POST - Créer une facture (réservé au caissier)
+// POST - Créer une facture (Système simplifié et fiable)
 router.post("/", requireRole('caissier', 'administrateur'), async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const {
-      numConv,
-      mois,
-      libelles
-    } = req.body;
+    const { numConv, mois, libelles } = req.body;
 
     // Validation
     if (!numConv || !mois) {
@@ -147,7 +147,6 @@ router.post("/", requireRole('caissier', 'administrateur'), async (req, res) => 
 
     // Vérifier que la convention existe
     const convention = await Convention.findByPk(numConv, { transaction: t });
-
     if (!convention) {
       await t.rollback();
       return res.status(404).json({
@@ -162,6 +161,14 @@ router.post("/", requireRole('caissier', 'administrateur'), async (req, res) => 
       Locataire.findByPk(convention.codeCli, { transaction: t })
     ]);
 
+    if (!batiment || !locataire) {
+      await t.rollback();
+      return res.status(404).json({
+        status: 404,
+        message: "Bâtiment ou locataire non trouvé"
+      });
+    }
+
     // Générer un numéro de facture unique
     const lastFacture = await Facture.findOne({
       order: [["numFact", "DESC"]],
@@ -169,46 +176,138 @@ router.post("/", requireRole('caissier', 'administrateur'), async (req, res) => 
     });
     const dm = lastFacture ? lastFacture.dm + 1 : 1;
 
-    // Créer la facture
-    const facture = await Facture.create({
-      dm,
-      exercice: new Date(),
-      mois: `${mois}-01`, // Format DATEONLY
-      codegare: 1, // À adapter selon votre logique
-      depart: batiment?.adresse?.substring(0, 10) || 'FIANARANTSOA',
-      destination: locataire?.adressecli?.substring(0, 10) || 'LOCATAIRE',
-      libelles: libelles || `Loyer ${mois}`,
-      numBat: convention.numBat,
-      numConv: convention.numConv,
-      codeCli: convention.codeCli
-    }, { transaction: t });
+    // Formater le mois (YYYY-MM -> YYYY-MM-01)
+    const moisFormatted = mois.includes('-') && mois.split('-').length === 2 
+      ? `${mois}-01` 
+      : mois;
+    const moisDate = new Date(moisFormatted);
+    
+    if (isNaN(moisDate.getTime())) {
+      await t.rollback();
+      return res.status(400).json({
+        status: 400,
+        message: `Format de mois invalide: ${mois}. Format attendu: YYYY-MM`
+      });
+    }
+
+    // Préparer les données
+    const departValue = batiment.adresse 
+      ? (batiment.adresse.length > 10 ? batiment.adresse.substring(0, 10) : batiment.adresse.padEnd(10, ' '))
+      : 'FIANARANTSOA';
+    const destinationValue = locataire.adressecli
+      ? (locataire.adressecli.length > 10 ? locataire.adressecli.substring(0, 10) : locataire.adressecli.padEnd(10, ' '))
+      : 'LOCATAIRE';
+    const libellesValue = libelles 
+      ? (libelles.length > 100 ? libelles.substring(0, 100) : libelles)
+      : `Loyer ${mois}`;
+
+    // Créer la facture avec SQL brut (garantit que seules les colonnes existantes sont utilisées)
+    await sequelize.query(
+      `INSERT INTO facture (dm, exercice, mois, codegare, depart, destination, libelles, numBat, numConv, codeCli, statutPaiement) 
+       VALUES (:dm, :exercice, :mois, :codegare, :depart, :destination, :libelles, :numBat, :numConv, :codeCli, :statutPaiement)`,
+      {
+        replacements: {
+          dm,
+          exercice: new Date(),
+          mois: moisFormatted,
+          codegare: 1,
+          depart: departValue,
+          destination: destinationValue,
+          libelles: libellesValue,
+          numBat: convention.numBat,
+          numConv: convention.numConv,
+          codeCli: convention.codeCli,
+          statutPaiement: 0
+        },
+        transaction: t
+      }
+    );
+
+    // Récupérer l'ID de la facture créée en utilisant LAST_INSERT_ID() dans la même transaction
+    const [idResults] = await sequelize.query(
+      'SELECT LAST_INSERT_ID() as insertId',
+      { 
+        transaction: t,
+        type: sequelize.QueryTypes.SELECT
+      }
+    );
+    
+    const numFact = idResults?.[0]?.insertId || idResults?.insertId;
+    
+    if (!numFact) {
+      // Fallback: récupérer la dernière facture créée avec ce dm dans la transaction
+      const lastFacture = await Facture.findOne({
+        where: { dm },
+        order: [["numFact", "DESC"]],
+        transaction: t
+      });
+      
+      if (!lastFacture) {
+        await t.rollback();
+        throw new Error('Impossible de récupérer l\'ID de la facture créée');
+      }
+      
+      // Récupérer la facture complète
+      const facture = await Facture.findByPk(lastFacture.numFact, { transaction: t });
+      await t.commit();
+      
+      return res.status(201).json({
+        status: 201,
+        message: "Facture créée avec succès",
+        data: facture.toJSON()
+      });
+    }
+    
+    // Récupérer la facture créée
+    const facture = await Facture.findByPk(numFact, { transaction: t });
+    
+    if (!facture) {
+      await t.rollback();
+      throw new Error('Impossible de récupérer la facture créée');
+    }
 
     await t.commit();
 
     res.status(201).json({
       status: 201,
       message: "Facture créée avec succès",
-      data: facture
+      data: facture.toJSON()
     });
   } catch (err) {
     await (t.finished ? Promise.resolve() : t.rollback());
     console.error("Erreur POST facture:", err);
+    console.error("Stack trace:", err.stack);
+    
+    let errorMessage = "Erreur serveur";
+    if (err.name === 'SequelizeValidationError') {
+      errorMessage = "Erreur de validation: " + err.errors.map(e => e.message).join(', ');
+    } else if (err.name === 'SequelizeUniqueConstraintError') {
+      errorMessage = "Une facture avec ce numéro existe déjà";
+    } else if (err.name === 'SequelizeForeignKeyConstraintError') {
+      errorMessage = "Référence invalide (bâtiment, convention ou locataire introuvable)";
+    } else {
+      errorMessage = err.message || "Erreur serveur";
+    }
+    
     res.status(500).json({
       status: 500,
-      message: "Erreur serveur",
-      error: err.message
+      message: errorMessage,
+      error: err.message,
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
 });
 
 // PUT - Mettre à jour une facture (statut de paiement)
 router.put("/:numFact", requireRole('caissier', 'administrateur'), async (req, res) => {
+  const t = await sequelize.transaction();
   try {
     const { numFact } = req.params;
-    const { mois, libelles, statutPaiement } = req.body;
+    const { statutPaiement, datePaiement } = req.body;
 
-    const facture = await Facture.findByPk(numFact);
+    const facture = await Facture.findByPk(numFact, { transaction: t });
     if (!facture) {
+      await t.rollback();
       return res.status(404).json({
         status: 404,
         message: "Facture non trouvée"
@@ -216,17 +315,54 @@ router.put("/:numFact", requireRole('caissier', 'administrateur'), async (req, r
     }
 
     const updates = {};
-    if (mois) updates.mois = mois;
-    if (libelles) updates.libelles = libelles;
+    const oldStatutPaiement = facture.statutPaiement;
+    
+    if (statutPaiement !== undefined) {
+      updates.statutPaiement = statutPaiement === true || statutPaiement === 'true';
+    }
 
-    await facture.update(updates);
+    await facture.update(updates, { transaction: t });
+
+    // Mettre à jour automatiquement le statut de la convention
+    const convention = await Convention.findByPk(facture.numConv, { transaction: t });
+    
+    if (convention && statutPaiement !== undefined) {
+      if (updates.statutPaiement === true && oldStatutPaiement === false) {
+        // Facture payée : passer de "En attente" à "Confirmé"
+        if (convention.statutConv === false) {
+          await convention.update({ statutConv: true }, { transaction: t });
+          console.log(`✅ Statut de la convention ${convention.numConv} mis à jour: En attente -> Confirmé`);
+        }
+      } else if (updates.statutPaiement === false && oldStatutPaiement === true) {
+        // Facture annulée (retour en arrière) : vérifier s'il reste des factures payées
+        const facturesPayees = await Facture.count({
+          where: {
+            numConv: convention.numConv,
+            statutPaiement: true
+          },
+          transaction: t
+        });
+        
+        // Si aucune facture n'est payée, repasser à "En attente"
+        if (facturesPayees === 0 && convention.statutConv === true) {
+          await convention.update({ statutConv: false }, { transaction: t });
+          console.log(`✅ Statut de la convention ${convention.numConv} mis à jour: Confirmé -> En attente (aucune facture payée)`);
+        }
+      }
+    }
+
+    await t.commit();
+
+    // Recharger la facture pour avoir les données à jour
+    await facture.reload();
 
     res.status(200).json({
       status: 200,
-      message: "Facture mise à jour",
-      data: facture
+      message: "Facture mise à jour avec succès. Le statut de la convention a été mis à jour automatiquement.",
+      data: facture.toJSON()
     });
   } catch (err) {
+    await (t.finished ? Promise.resolve() : t.rollback());
     console.error("Erreur PUT facture:", err);
     res.status(500).json({
       status: 500,
@@ -237,7 +373,7 @@ router.put("/:numFact", requireRole('caissier', 'administrateur'), async (req, r
 });
 
 // DELETE - Supprimer une facture
-router.delete("/:numFact", requireRole('administrateur'), async (req, res) => {
+router.delete("/:numFact", requireRole('caissier', 'administrateur'), async (req, res) => {
   try {
     const { numFact } = req.params;
     const facture = await Facture.findByPk(numFact);
@@ -276,14 +412,40 @@ router.get("/stats/summary", requireRole('caissier', 'administrateur'), async (r
     }
 
     const totalFactures = await Facture.count({ where });
-    const facturesPayees = await Facture.count({ where: { ...where } }); // À adapter selon votre logique de statut
+    const facturesPayees = await Facture.count({ 
+      where: { 
+        ...where, 
+        statutPaiement: true 
+      } 
+    });
+
+    // Calculer le montant total des factures
+    const factures = await Facture.findAll({ 
+      where,
+      attributes: ['numBat']
+    });
+
+    const numBats = [...new Set(factures.map(f => f.numBat).filter(Boolean))];
+    
+    const batiments = numBats.length > 0 
+      ? await Mbatiment.findAll({
+          where: { numBat: { [Op.in]: numBats } },
+          attributes: ['numBat', 'montant']
+        })
+      : [];
+
+    const montantsMap = new Map(batiments.map(b => [b.numBat, b.montant || 0]));
+    const montantTotal = factures.reduce((sum, f) => {
+      return sum + (montantsMap.get(f.numBat) || 0);
+    }, 0);
 
     res.status(200).json({
       status: 200,
       data: {
         totalFactures,
         facturesPayees,
-        facturesEnAttente: totalFactures - facturesPayees
+        facturesEnAttente: totalFactures - facturesPayees,
+        montantTotal
       }
     });
   } catch (err) {
@@ -297,4 +459,3 @@ router.get("/stats/summary", requireRole('caissier', 'administrateur'), async (r
 });
 
 module.exports = router;
-

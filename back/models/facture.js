@@ -59,7 +59,29 @@ module.exports = function(sequelize, DataTypes) {
         model: 'locataire',
         key: 'codeCli'
       }
+    },
+    statutPaiement: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
     }
+    // Les colonnes dateDebut, dateFin et datePaiement sont commentées car elles n'existent pas encore dans la DB
+    // Décommentez-les après avoir exécuté la migration 20250122000000-add-periodes-facture.js
+    // dateDebut: {
+    //   type: DataTypes.DATEONLY,
+    //   allowNull: true,
+    //   comment: 'Date de début de la période couverte par le paiement'
+    // },
+    // dateFin: {
+    //   type: DataTypes.DATEONLY,
+    //   allowNull: true,
+    //   comment: 'Date de fin de la période couverte par le paiement'
+    // },
+    // datePaiement: {
+    //   type: DataTypes.DATEONLY,
+    //   allowNull: true,
+    //   comment: 'Date effective du paiement'
+    // }
   }, {
     sequelize,
     tableName: 'facture',

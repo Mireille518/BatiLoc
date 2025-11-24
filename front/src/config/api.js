@@ -25,8 +25,16 @@ export const apiRequest = async (endpoint, options = {}) => {
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Erreur serveur' }));
-    throw new Error(error.message || `Erreur ${response.status}`);
+    const errorData = await response.json().catch(() => ({ message: 'Erreur serveur' }));
+    
+    // Pour les erreurs 403, inclure les détails si disponibles
+    if (response.status === 403 && errorData.details) {
+      const details = errorData.details;
+      const errorMessage = `${errorData.message || 'Accès refusé'}\nRôle détecté: ${details.userPoste || 'non défini'}\nRôles autorisés: ${details.allowedRoles?.join(', ') || 'non défini'}`;
+      throw new Error(errorMessage);
+    }
+    
+    throw new Error(errorData.message || `Erreur ${response.status}`);
   }
 
   return response.json();
@@ -47,6 +55,7 @@ export const API_ENDPOINTS = {
   // Conventions
   CONVENTIONS: '/conventions',
   CONVENTION: (id) => `/conventions/${id}`,
+  CONVENTIONS_AVAILABLE_FOR_INVOICE: '/conventions/available-for-invoice',
   
   // Factures
   FACTURES: '/factures',

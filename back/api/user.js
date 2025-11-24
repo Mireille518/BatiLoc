@@ -171,10 +171,14 @@ router.post("/login", async (req, res) => {
         }
 
         // Mot de passe correct - générer le token
+        // Normaliser le poste (enlever espaces, convertir en minuscule)
+        const posteFromDb = value.getDataValue("poste") || '';
+        const posteNormalized = posteFromDb.trim().toLowerCase();
+        
         const userdetail = {
             nom: value.getDataValue("nom"),
             matricule: value.getDataValue("matricule"),
-            poste: value.getDataValue("poste"),
+            poste: posteNormalized,
             email: value.getDataValue("email")
         };
 
@@ -182,7 +186,7 @@ router.post("/login", async (req, res) => {
             expiresIn: "48h"
         });
 
-        console.log('✅ Connexion réussie pour:', userdetail.matricule);
+        console.log('✅ Connexion réussie pour:', userdetail.matricule, 'Poste:', posteNormalized);
         return res.status(200).json({
             message: "Connecté avec succès",
             status: 200,
@@ -190,7 +194,7 @@ router.post("/login", async (req, res) => {
             user: {
                 matricule: userdetail.matricule,
                 nom: userdetail.nom,
-                poste: userdetail.poste,
+                poste: posteNormalized,
                 email: userdetail.email
             }
         });
@@ -265,5 +269,132 @@ router.get("/profile", (req, res) => {
         })
     })
 })
+
+// UPDATE - Mettre à jour un utilisateur (admin seulement)
+router.put("/:matricule", async (req, res) => {
+    try {
+        const { matricule } = req.params;
+        const { nom, contact, email, poste, mdp, numConv } = req.body;
+
+        // Vérifier si l'utilisateur existe
+        const user = await UserModel.findByPk(matricule);
+        if (!user) {
+            return res.status(404).json({
+                message: "Utilisateur non trouvé",
+                status: 404
+            });
+        }
+
+        // Validation du poste si fourni
+        if (poste && !POSTES_AUTORISES.includes(poste.toLowerCase())) {
+            return res.status(400).json({
+                message: "Poste invalide. Les postes autorisés sont : caissier, administrateur, opérateur de saisie",
+                status: 400
+            });
+        }
+
+        // Vérifier si l'email existe déjà pour un autre utilisateur
+        if (email && email !== user.email) {
+            const existingUser = await UserModel.findOne({
+                where: { 
+                    email: email,
+                    matricule: { [Op.ne]: matricule }
+                }
+            });
+            if (existingUser) {
+                return res.status(409).json({
+                    message: "Cet email est déjà utilisé par un autre utilisateur",
+                    status: 409
+                });
+            }
+        }
+
+        // Vérifier si le contact existe déjà pour un autre utilisateur
+        if (contact && contact !== user.contact) {
+            const existingUser = await UserModel.findOne({
+                where: { 
+                    contact: contact,
+                    matricule: { [Op.ne]: matricule }
+                }
+            });
+            if (existingUser) {
+                return res.status(409).json({
+                    message: "Ce contact est déjà utilisé par un autre utilisateur",
+                    status: 409
+                });
+            }
+        }
+
+        // Préparer les données de mise à jour
+        const updateData = {};
+        if (nom) updateData.nom = nom;
+        if (contact) updateData.contact = contact;
+        if (email) updateData.email = email;
+        if (poste) updateData.poste = poste.toLowerCase();
+        if (numConv !== undefined) updateData.numConv = numConv || null;
+        
+        // Hasher le mot de passe si fourni
+        if (mdp) {
+            const salt = await bcrypt.genSalt(10);
+            updateData.mdp = await bcrypt.hash(mdp, salt);
+        }
+
+        // Mettre à jour l'utilisateur
+        await user.update(updateData);
+
+        // Récupérer l'utilisateur mis à jour (sans mot de passe)
+        const updatedUser = await UserModel.findByPk(matricule, {
+            attributes: ['matricule', 'nom', 'contact', 'email', 'poste', 'numConv']
+        });
+
+        console.log('✅ Utilisateur mis à jour:', matricule);
+        return res.status(200).json({
+            message: "Utilisateur mis à jour avec succès",
+            status: 200,
+            data: updatedUser
+        });
+
+    } catch (err) {
+        console.error('❌ Erreur mise à jour utilisateur:', err);
+        return res.status(500).json({
+            message: "Erreur serveur",
+            status: 500,
+            error: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
+    }
+});
+
+// DELETE - Supprimer un utilisateur (admin seulement)
+router.delete("/:matricule", async (req, res) => {
+    try {
+        const { matricule } = req.params;
+
+        // Vérifier si l'utilisateur existe
+        const user = await UserModel.findByPk(matricule);
+        if (!user) {
+            return res.status(404).json({
+                message: "Utilisateur non trouvé",
+                status: 404
+            });
+        }
+
+        // Supprimer l'utilisateur
+        await user.destroy();
+
+        console.log('✅ Utilisateur supprimé:', matricule);
+        return res.status(200).json({
+            message: "Utilisateur supprimé avec succès",
+            status: 200
+        });
+
+    } catch (err) {
+        console.error('❌ Erreur suppression utilisateur:', err);
+        return res.status(500).json({
+            message: "Erreur serveur",
+            status: 500,
+            error: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
+    }
+});
 
 module.exports = router

@@ -28,6 +28,14 @@ const authenticateToken = (req, res, next) => {
 
     // Ajouter les infos utilisateur à la requête
     req.user = decoded;
+    
+    // Log de débogage pour voir ce qui est décodé
+    console.log('🔑 Token décodé:', {
+      matricule: decoded.matricule,
+      poste: decoded.poste,
+      nom: decoded.nom
+    });
+    
     next();
   });
 };
@@ -45,13 +53,34 @@ const requireRole = (...allowedRoles) => {
       });
     }
 
-    const userRole = (req.user.poste || '').toLowerCase();
-    const normalizedAllowedRoles = allowedRoles.map(r => r.toLowerCase());
+    // Normaliser le rôle de l'utilisateur (enlever espaces, convertir en minuscule)
+    const userRole = (req.user.poste || '').trim().toLowerCase();
+    const normalizedAllowedRoles = allowedRoles.map(r => r.trim().toLowerCase());
+
+    // Log de débogage (toujours afficher pour déboguer les problèmes de permissions)
+    console.log('🔐 Vérification de rôle:', {
+      userRole,
+      allowedRoles: normalizedAllowedRoles,
+      userPoste: req.user.poste,
+      userMatricule: req.user.matricule,
+      match: normalizedAllowedRoles.includes(userRole)
+    });
 
     if (!normalizedAllowedRoles.includes(userRole)) {
+      console.error('❌ Accès refusé - Rôle non autorisé:', {
+        userRole,
+        allowedRoles: normalizedAllowedRoles,
+        userPoste: req.user.poste,
+        userMatricule: req.user.matricule
+      });
       return res.status(403).json({
         status: 403,
-        message: 'Accès refusé. Permissions insuffisantes.'
+        message: 'Accès refusé. Permissions insuffisantes.',
+        details: {
+          userRole,
+          allowedRoles: normalizedAllowedRoles,
+          userPoste: req.user.poste
+        }
       });
     }
 

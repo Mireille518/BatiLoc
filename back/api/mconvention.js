@@ -7,6 +7,7 @@ const { DataTypes, Op } = require("sequelize");
 const Convention = require("../models/convention")(sequelize, DataTypes);
 const Mbatiment = require("../models/mbatiment")(sequelize, DataTypes);
 const Locataire = require("../models/locataire")(sequelize, DataTypes);
+const Facture = require("../models/facture")(sequelize, DataTypes);
 
 // Helper: current year as a DateOnly (YYYY-01-01)
 function getCurrentYearDateOnly() {
@@ -98,6 +99,70 @@ router.get("/", async (req, res) => {
   }
 });
 
+// GET - Conventions disponibles pour création de facture
+// Retourne uniquement les conventions "En attente" (statutConv = false) qui n'ont pas encore de facture
+router.get("/available-for-invoice", async (req, res) => {
+  try {
+    // Récupérer toutes les conventions "En attente" (statutConv = false)
+    const conventions = await Convention.findAll({
+      where: {
+        statutConv: false // Seulement "En attente"
+      },
+      order: [["numConv", "DESC"]]
+    });
+
+    // Récupérer toutes les factures existantes pour ces conventions
+    const numConvs = conventions.map(c => c.numConv);
+    const factures = numConvs.length > 0 
+      ? await Facture.findAll({
+          where: { numConv: { [Op.in]: numConvs } },
+          attributes: ['numConv']
+        })
+      : [];
+
+    // Créer un Set des numConvs qui ont déjà une facture
+    const conventionsAvecFacture = new Set(factures.map(f => f.numConv));
+
+    // Filtrer les conventions qui n'ont pas encore de facture
+    const conventionsDisponibles = conventions.filter(c => !conventionsAvecFacture.has(c.numConv));
+
+    // Récupérer les bâtiments et locataires associés
+    const numBats = [...new Set(conventionsDisponibles.map(c => c.numBat))];
+    const codeClis = [...new Set(conventionsDisponibles.map(c => c.codeCli))];
+
+    const [batiments, locataires] = await Promise.all([
+      numBats.length > 0 ? Mbatiment.findAll({ where: { numBat: { [Op.in]: numBats } } }) : Promise.resolve([]),
+      codeClis.length > 0 ? Locataire.findAll({ where: { codeCli: { [Op.in]: codeClis } } }) : Promise.resolve([])
+    ]);
+
+    const batimentsMap = new Map(batiments.map(b => [b.numBat, b.toJSON()]));
+    const locatairesMap = new Map(locataires.map(l => [l.codeCli, l.toJSON()]));
+
+    // Enrichir les conventions avec les données associées
+    const data = conventionsDisponibles.map(c => {
+      const conv = c.toJSON();
+      return {
+        ...conv,
+        batiment: batimentsMap.get(conv.numBat) || null,
+        locataire: locatairesMap.get(conv.codeCli) || null
+      };
+    });
+
+    res.status(200).json({
+      status: 200,
+      message: "Conventions disponibles pour création de facture",
+      data
+    });
+  } catch (err) {
+    console.error("Erreur GET conventions disponibles:", err);
+    res.status(500).json({ 
+      status: 500, 
+      message: "Erreur serveur", 
+      error: err.message 
+    });
+  }
+});
+
 // POST create convention (creates/updates locataire if CIN exists)
 router.post("/", require("../middleware/validator").validateConvention, async (req, res) => {
   const t = await sequelize.transaction();
@@ -172,20 +237,116 @@ router.post("/", require("../middleware/validator").validateConvention, async (r
 
 // PUT update convention (front devra contrôler max 2 modifs)
 router.put("/:numConv", async (req, res) => {
+  const t = await sequelize.transaction();
   try {
     const { numConv } = req.params;
-    const updates = {};
-    const allowed = ["lieu", "numBat", "codeCli", "statutConv", "numFact"]; // dateConv reste l'année de création
-    for (const key of allowed) {
-      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    const {
+      // step 1 - batiment
+      numBat, adresse, montant,
+      // step 2 - locataire
+      nomcli, datenais, lieunais, pere, mere, cin, delivcin, adressecli, activite,
+      // optional
+      statutConv
+    } = req.body;
+
+    const conv = await Convention.findByPk(numConv, { transaction: t });
+    if (!conv) {
+      await t.rollback();
+      return res.status(404).json({ status: 404, message: "Convention non trouvée" });
     }
 
-    const conv = await Convention.findByPk(numConv);
-    if (!conv) return res.status(404).json({ status: 404, message: "Convention non trouvée" });
+    // Mettre à jour le bâtiment si les informations sont fournies
+    if (numBat !== undefined || adresse !== undefined || montant !== undefined) {
+      const batId = numBat || conv.numBat;
+      const bat = await Mbatiment.findByPk(batId, { transaction: t });
+      
+      if (bat) {
+        const batUpdates = {};
+        if (adresse !== undefined) {
+          batUpdates.adresse = String(adresse).substring(0, 20);
+        }
+        if (montant !== undefined) {
+          batUpdates.montant = Number.parseFloat(montant);
+        }
+        if (Object.keys(batUpdates).length > 0) {
+          await bat.update(batUpdates, { transaction: t });
+        }
+      }
+    }
 
-    await conv.update(updates);
-    res.status(200).json({ status: 200, message: "Convention mise à jour", data: conv });
+    // Mettre à jour le locataire si les informations sont fournies
+    if (nomcli !== undefined || datenais !== undefined || lieunais !== undefined || 
+        pere !== undefined || mere !== undefined || cin !== undefined || 
+        delivcin !== undefined || adressecli !== undefined || activite !== undefined) {
+      
+      const loc = await Locataire.findByPk(conv.codeCli, { transaction: t });
+      
+      if (loc) {
+        const locUpdates = {};
+        if (nomcli !== undefined) locUpdates.nomcli = nomcli;
+        if (datenais !== undefined) locUpdates.datenais = datenais;
+        if (lieunais !== undefined) locUpdates.lieunais = lieunais;
+        if (pere !== undefined) locUpdates.pere = pere;
+        if (mere !== undefined) locUpdates.mere = mere;
+        if (cin !== undefined) locUpdates.cin = cin;
+        if (delivcin !== undefined) locUpdates.delivcin = delivcin;
+        if (adressecli !== undefined) locUpdates.adressecli = adressecli;
+        if (activite !== undefined) locUpdates.activite = activite;
+        
+        if (Object.keys(locUpdates).length > 0) {
+          await loc.update(locUpdates, { transaction: t });
+        }
+      }
+    }
+
+    // Mettre à jour la convention elle-même
+    const convUpdates = {};
+    if (statutConv !== undefined) convUpdates.statutConv = !!statutConv;
+    if (numBat !== undefined) {
+      convUpdates.numBat = Number(numBat);
+      // Mettre à jour le lieu si le bâtiment change
+      const newBat = await Mbatiment.findByPk(numBat, { transaction: t });
+      if (newBat) {
+        convUpdates.lieu = newBat.adresse.substring(0, 10);
+      }
+    }
+    
+    if (Object.keys(convUpdates).length > 0) {
+      await conv.update(convUpdates, { transaction: t });
+    }
+
+    await t.commit();
+    
+    // Récupérer les données mises à jour avec les relations (en dehors de la transaction)
+    const updatedConv = await Convention.findByPk(numConv);
+    if (!updatedConv) {
+      return res.status(404).json({ status: 404, message: "Convention non trouvée après mise à jour" });
+    }
+    
+    const [batiment, locataire] = await Promise.all([
+      Mbatiment.findByPk(updatedConv.numBat),
+      Locataire.findByPk(updatedConv.codeCli)
+    ]);
+
+    const responseData = {
+      ...updatedConv.toJSON(),
+      batiment: batiment ? batiment.toJSON() : null,
+      locataire: locataire ? locataire.toJSON() : null
+    };
+
+    console.log('Convention mise à jour:', {
+      numConv: responseData.numConv,
+      batiment: responseData.batiment?.adresse,
+      locataire: responseData.locataire?.nomcli
+    });
+
+    res.status(200).json({ 
+      status: 200, 
+      message: "Convention mise à jour avec succès", 
+      data: responseData
+    });
   } catch (err) {
+    await (t.finished ? Promise.resolve() : t.rollback());
     console.error("Erreur PUT convention:", err);
     res.status(500).json({ status: 500, message: "Erreur serveur", error: err.message });
   }
@@ -193,14 +354,113 @@ router.put("/:numConv", async (req, res) => {
 
 // DELETE cancel convention
 router.delete("/:numConv", async (req, res) => {
+  const t = await sequelize.transaction();
   try {
-    const { numConv } = req.params;
-    const conv = await Convention.findByPk(numConv);
-    if (!conv) return res.status(404).json({ status: 404, message: "Convention non trouvée" });
-    await conv.destroy();
-    res.status(200).json({ status: 200, message: "Convention annulée" });
+    const numConv = parseInt(req.params.numConv);
+    if (isNaN(numConv)) {
+      if (!t.finished) {
+        await t.rollback();
+      }
+      return res.status(400).json({ status: 400, message: "Numéro de convention invalide" });
+    }
+
+    console.log('🗑️ Tentative de suppression de la convention:', numConv);
+    
+    const conv = await Convention.findByPk(numConv, { transaction: t });
+    if (!conv) {
+      if (!t.finished) {
+        await t.rollback();
+      }
+      console.log('❌ Convention non trouvée:', numConv);
+      return res.status(404).json({ status: 404, message: "Convention non trouvée" });
+    }
+
+    // Charger les modèles
+    const Facture = require("../models/facture")(sequelize, DataTypes);
+    const Utilisateur = require("../models/utilisateur")(sequelize, DataTypes);
+    
+    // Compter les factures associées
+    const countFactures = await Facture.count({ 
+      where: { numConv: numConv },
+      transaction: t 
+    });
+    
+    if (countFactures > 0) {
+      console.log(`⚠️ Suppression de ${countFactures} facture(s) associée(s) à la convention ${numConv}`);
+      
+      // Supprimer toutes les factures associées en une seule requête SQL (plus efficace)
+      await sequelize.query(
+        `DELETE FROM facture WHERE numConv = :numConv`,
+        {
+          replacements: { numConv: numConv },
+          type: sequelize.QueryTypes.DELETE,
+          transaction: t
+        }
+      );
+      console.log(`  ✓ ${countFactures} facture(s) supprimée(s)`);
+    }
+
+    // Mettre à jour les utilisateurs associés (mettre numConv à null au lieu de supprimer)
+    const utilisateursAssocies = await Utilisateur.findAll({ 
+      where: { numConv: numConv },
+      transaction: t 
+    });
+    
+    if (utilisateursAssocies.length > 0) {
+      console.log(`⚠️ Mise à jour de ${utilisateursAssocies.length} utilisateur(s) associé(s) à la convention ${numConv}`);
+      
+      // Mettre à jour les utilisateurs pour retirer la référence à la convention
+      for (const utilisateur of utilisateursAssocies) {
+        await utilisateur.update({ numConv: null }, { transaction: t });
+        console.log(`  ✓ Utilisateur ${utilisateur.matricule} mis à jour`);
+      }
+    }
+
+    // Supprimer la convention
+    await conv.destroy({ transaction: t });
+    
+    // Construire le message de réponse avant le commit
+    let message = "Convention supprimée avec succès";
+    const details = [];
+    
+    if (countFactures > 0) {
+      details.push(`${countFactures} facture(s) supprimée(s)`);
+    }
+    
+    if (utilisateursAssocies.length > 0) {
+      details.push(`${utilisateursAssocies.length} utilisateur(s) mis à jour`);
+    }
+    
+    if (details.length > 0) {
+      message = `Convention supprimée avec succès (${details.join(', ')})`;
+    }
+    
+    // Valider la transaction
+    await t.commit();
+    
+    console.log('✅ Convention supprimée avec succès:', numConv);
+    
+    res.status(200).json({ 
+      status: 200, 
+      message: message,
+      facturesSupprimees: countFactures,
+      utilisateursMisAJour: utilisateursAssocies.length
+    });
   } catch (err) {
-    console.error("Erreur DELETE convention:", err);
+    // Vérifier si la transaction est encore active avant de faire le rollback
+    if (!t.finished) {
+      await t.rollback();
+    }
+    console.error("❌ Erreur DELETE convention:", err);
+    
+    // Gérer les erreurs de contrainte de clé étrangère
+    if (err.name === 'SequelizeForeignKeyConstraintError') {
+      return res.status(400).json({ 
+        status: 400, 
+        message: "Impossible de supprimer la convention car elle est référencée par d'autres données" 
+      });
+    }
+    
     res.status(500).json({ status: 500, message: "Erreur serveur", error: err.message });
   }
 });

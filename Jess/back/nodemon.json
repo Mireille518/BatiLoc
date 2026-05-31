@@ -1,0 +1,23 @@
+{
+  "watch": ["."],
+  "ext": "js,json",
+  "ignore": [
+    "node_modules",
+    "*.test.js",
+    "*.spec.js",
+    "data/*.json",
+    "test-*.js",
+    "reset-*.js",
+    "seed-*.js",
+    "create-*.js",
+    "insert-*.js",
+    "fill-*.js",
+    "fix-*.js",
+    "run-*.js",
+    "mark-*.js",
+    "show-*.js"
+  ],
+  "delay": 1000,
+  "verbose": false
+}
+

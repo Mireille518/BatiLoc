@@ -1,0 +1,38 @@
+[
+  {
+    "id": "1764314981028",
+    "matricule": "em-100900",
+    "poste": "opérateur de saisie",
+    "mdp": "azerty",
+    "statut": "rejetee",
+    "dateCreation": "2025-11-28T07:29:41.028Z",
+    "dateApprobation": null,
+    "dateRejet": "2025-12-07T15:32:34.562Z",
+    "approuvePar": null,
+    "rejetePar": "200000"
+  },
+  {
+    "id": "1764701155947",
+    "matricule": "em-100900",
+    "poste": "caissier",
+    "mdp": "azerty",
+    "statut": "rejetee",
+    "dateCreation": "2025-12-02T18:45:55.947Z",
+    "dateApprobation": null,
+    "dateRejet": "2025-12-07T15:32:32.025Z",
+    "approuvePar": null,
+    "rejetePar": "200000"
+  },
+  {
+    "id": "1771852731927",
+    "matricule": "200000",
+    "poste": "opérateur de saisie",
+    "mdp": "azerty",
+    "statut": "en_attente",
+    "dateCreation": "2026-02-23T13:18:51.927Z",
+    "dateApprobation": null,
+    "dateRejet": null,
+    "approuvePar": null,
+    "rejetePar": null
+  }
+]
